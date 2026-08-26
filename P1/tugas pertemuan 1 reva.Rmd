@@ -1,0 +1,124 @@
+---
+title: "mpdw"
+author: "Reva"
+date: "2026-08-26"
+output: html_document
+---
+```{r}
+
+rm(list = ls())
+set.seed(123)
+
+df <- read.csv("C:/Users/USER/Downloads/data_reva_cabai.csv", sep = ";", stringsAsFactors = FALSE)
+
+df$Harga   <- as.numeric(gsub(",", ".", df$Harga))
+df$Tanggal <- as.Date(df$Tanggal, format = "%d/%m/%Y")
+df <- df[order(df$Tanggal), ]
+
+cat("Jumlah observasi :", nrow(df), "\n")
+cat("Periode           :", format(min(df$Tanggal)), "s/d", format(max(df$Tanggal)), "\n")
+
+harga <- df$Harga
+n     <- length(harga)
+
+ts_harga <- ts(harga, frequency = 5)
+
+# EKSPLORASI DATA 
+png("plot_data_asli.png", width = 900, height = 500)
+plot(df$Tanggal, harga, type = "l", col = "steelblue", lwd = 2,
+     main = "Harga Cabai Merah - Data Reva (100 Observasi)",
+     xlab = "Tanggal", ylab = "Harga (Rp ribu/kg)")
+grid()
+dev.off()
+
+# METODE 1: SINGLE MOVING AVERAGE (SMA) 
+m <- 3  # orde pemulusan
+
+sma <- function(x, m) {
+  n <- length(x)
+  out <- rep(NA, n)
+  for (t in m:n) out[t] <- mean(x[(t - m + 1):t])
+  out
+}
+
+SMA_t <- sma(harga, m)
+# Fitted (ramalan 1 langkah ke depan): F_t = SMA_(t-1)
+F_SMA <- c(NA, SMA_t[1:(n - 1)])
+
+# METODE 2: DOUBLE MOVING AVERAGE (DMA)
+Sp  <- sma(harga, m)     # S'_t : rata-rata bergerak tunggal
+Spp <- sma(Sp, m)        # S''_t: rata-rata bergerak ganda (dari S')
+
+a_t <- 2 * Sp - Spp
+b_t <- (2 / (m - 1)) * (Sp - Spp)
+
+# Fitted (ramalan 1 langkah ke depan): F_t = a_(t-1) + b_(t-1)*1
+F_DMA <- c(NA, (a_t + b_t)[1:(n - 1)])
+
+# METODE 3: SINGLE EXPONENTIAL SMOOTHING (SES) 
+ses_fit <- HoltWinters(ts_harga, beta = FALSE, gamma = FALSE)
+alpha_opt <- ses_fit$alpha
+F_SES <- c(rep(NA, n - length(fitted(ses_fit)[, "xhat"])), fitted(ses_fit)[, "xhat"])
+
+# METODE 4: DOUBLE EXPONENTIAL SMOOTHING / HOLT (DES) 
+des_fit <- HoltWinters(ts_harga, gamma = FALSE)
+alpha_des <- des_fit$alpha
+beta_des  <- des_fit$beta
+F_DES <- c(rep(NA, n - length(fitted(des_fit)[, "xhat"])), fitted(des_fit)[, "xhat"])
+
+# METODE 5: HOLT-WINTERS (dengan komponen musiman) 
+hw_fit <- HoltWinters(ts_harga, seasonal = "additive")
+F_HW <- c(rep(NA, n - length(fitted(hw_fit)[, "xhat"])), fitted(hw_fit)[, "xhat"])
+
+# PERHITUNGAN METRIK AKURASI 
+start_idx <- max(which(!is.na(F_SMA))[1],
+                  which(!is.na(F_DMA))[1],
+                  which(!is.na(F_SES))[1],
+                  which(!is.na(F_DES))[1],
+                  which(!is.na(F_HW))[1])
+
+idx <- start_idx:n
+aktual <- harga[idx]
+
+hitung_metrik <- function(aktual, prediksi) {
+  e    <- aktual - prediksi
+  sse  <- sum(e^2)
+  mse  <- mean(e^2)
+  rmse <- sqrt(mse)
+  mape <- mean(abs(e / aktual)) * 100
+  c(SSE = sse, MSE = mse, RMSE = rmse, MAPE = mape)
+}
+
+hasil <- rbind(
+  SMA          = hitung_metrik(aktual, F_SMA[idx]),
+  DMA          = hitung_metrik(aktual, F_DMA[idx]),
+  SES          = hitung_metrik(aktual, F_SES[idx]),
+  `DES (Holt)` = hitung_metrik(aktual, F_DES[idx]),
+  `Holt-Winters` = hitung_metrik(aktual, F_HW[idx])
+)
+
+cat("\nRentang evaluasi   : titik ke-", start_idx, "sampai ke-", n,
+    " (", length(idx), "observasi )\n")
+cat("\n=== TABEL PERBANDINGAN AKURASI ===\n")
+print(round(hasil, 4))
+
+metode_terbaik <- rownames(hasil)[which.min(hasil[, "MSE"])]
+cat("\nMetode terbaik (MSE terkecil):", metode_terbaik, "\n")
+
+# VISUALISASI PERBANDINGAN 
+png("plot_perbandingan.png", width = 1000, height = 600)
+plot(idx, aktual, type = "l", col = "black", lwd = 2,
+     main = "Perbandingan Aktual vs Hasil Pemulusan",
+     xlab = "Periode ke-", ylab = "Harga (Rp ribu/kg)")
+lines(idx, F_SMA[idx], col = "red",     lwd = 1.5)
+lines(idx, F_DMA[idx], col = "orange",  lwd = 1.5)
+lines(idx, F_SES[idx], col = "forestgreen", lwd = 1.5)
+lines(idx, F_DES[idx], col = "purple",  lwd = 1.5)
+lines(idx, F_HW[idx],  col = "deepskyblue4", lwd = 1.5)
+legend("topleft",
+       legend = c("Aktual", "SMA", "DMA", "SES", "DES (Holt)", "Holt-Winters"),
+       col = c("black", "red", "orange", "forestgreen", "purple", "deepskyblue4"),
+       lwd = 2, cex = 0.8, bty = "n")
+dev.off()
+```
+
