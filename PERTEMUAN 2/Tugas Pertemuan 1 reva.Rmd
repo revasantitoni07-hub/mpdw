@@ -1,0 +1,440 @@
+---
+title: "mpdw per1"
+author: "reva"
+date: "2026-08-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# 1. INSTALASI DAN LIBRARY PACKAGE
+
+library(TTR)
+library(forecast)
+library(ggplot2)
+
+# 2. DATA YANG DIGUNAKAN
+
+baris_bersih <- gsub('"', '', readLines("C:/Users/USER/Documents/IPB/bagian_reva.csv"))
+data_reva <- read.csv(text = baris_bersih, stringsAsFactors = FALSE)
+colnames(data_reva) <- c("Tanggal", "Close")
+data_reva$Tanggal <- as.Date(data_reva$Tanggal, format = "%Y-%m-%d")
+data_reva <- data_reva[order(data_reva$Tanggal), ]
+
+nrow(data_reva)
+
+y <- as.numeric(data_reva$Close)
+data_reva
+
+# 3. ANALISIS DATA
+
+# 3.1 EKSPLORASI DATA
+
+# --- Statistika Deskriptif ---
+summary(data_reva$Close)
+
+# --- Missing Value ---
+sum(is.na(data_reva$Close))
+
+data_reva_clean <- na.omit(data_reva)
+nrow(data_reva_clean)
+
+head(data_reva_clean)
+
+# --- Time Series Plot ---
+harga_ts <- ts(data_reva_clean$Close)
+
+plot(harga_ts,
+     main = "Harga Penutupan - Data Reva",
+     xlab = "Periode",
+     ylab = "Harga Penutupan",
+     col = "blue")
+
+# 3.2 PEMBAGIAN DATA (80% LATIH, 20% UJI)
+
+data_saya <- data_reva_clean
+n <- nrow(data_saya)
+
+n_train <- floor(0.8 * n)
+
+train <- data_saya$Close[1:n_train]
+test  <- data_saya$Close[(n_train + 1):n]
+n_test <- length(test)
+
+length(train)
+length(test)
+
+# 3.3 EKSPLORASI DATA LATIH DAN DATA UJI
+
+# --- Data Latih ---
+plot(ts(train),
+     main = "Data Latih Harga Penutupan - Reva",
+     xlab = "Periode",
+     ylab = "Harga Penutupan (Rp)")
+
+# --- Data Uji ---
+plot(ts(test),
+     main = "Data Uji Harga Penutupan - Reva",
+     xlab = "Periode",
+     ylab = "Harga Penutupan (Rp)")
+
+# --- Pembagian Data Latih dan Data Uji ---
+training <- data.frame(
+  periode     = data_saya$Tanggal[1:n_train],
+  harga_close = train
+)
+
+testing <- data.frame(
+  periode     = data_saya$Tanggal[(n_train + 1):n],
+  harga_close = test
+)
+
+ggplot() +
+  geom_line(
+    data = training,
+    aes(x = periode, y = harga_close, color = "Data Latih")
+  ) +
+  geom_line(
+    data = testing,
+    aes(x = periode, y = harga_close, color = "Data Uji")
+  ) +
+  labs(
+    title = "Pembagian Data Latih dan Data Uji Harga Penutupan - Reva",
+    x = "Periode Waktu",
+    y = "Harga Penutupan (Rp)",
+    color = "Keterangan"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Data Latih" = "blue",
+      "Data Uji"   = "red"
+    )
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+# 3.4 SINGLE MOVING AVERAGE (SMA)
+
+# --- Menentukan Nilai m ---
+nilai_m <- c(3, 4, 5, 7, 10, 20)
+
+hasil_sma <- data.frame(
+  m = nilai_m,
+  SSE = NA,
+  MSE = NA,
+  RMSE = NA,
+  MAPE = NA
+)
+
+for (i in 1:length(nilai_m)) {
+
+  m <- nilai_m[i]
+
+  # Menghitung SMA pada data latih
+  data.sma <- SMA(training$harga_close, n = m)
+
+  # Mengambil nilai SMA terakhir
+  nilai_terakhir <- tail(na.omit(data.sma), 1)
+
+  # Forecast untuk seluruh data uji
+  ramalan <- rep(nilai_terakhir, n_test)
+
+  # Error
+  error <- testing$harga_close - ramalan
+
+  # SSE
+  SSE <- sum(error^2)
+
+  # MSE
+  MSE <- mean(error^2)
+
+  # RMSE
+  RMSE <- sqrt(MSE)
+
+  # MAPE
+  MAPE <- mean(abs(error / testing$harga_close)) * 100
+
+  # Masukkan hasil
+  hasil_sma[i, "SSE"]  <- SSE
+  hasil_sma[i, "MSE"]  <- MSE
+  hasil_sma[i, "RMSE"] <- RMSE
+  hasil_sma[i, "MAPE"] <- MAPE
+}
+
+hasil_sma
+
+# --- Pilih m dengan MSE data uji terkecil ---
+m <- hasil_sma$m[which.min(hasil_sma$MSE)]
+cat("Nilai m terpilih (MSE uji terkecil):", m, "\n")
+
+h_test <- nrow(testing)
+
+train.ts <- training$harga_close
+data1.ts <- c(training$harga_close, testing$harga_close)
+
+data.sma   <- SMA(train.ts, n = m)
+data.ramal <- c(NA, data.sma)
+
+data.gab <- cbind(
+  aktual    = data1.ts,
+  pemulusan = c(data.sma, rep(NA, h_test)),
+  ramalan   = c(data.ramal, rep(data.ramal[length(data.ramal)], h_test - 1))
+)
+print(tail(data.gab, h_test + 2))
+
+# --- Visualisasi Plot SMA ---
+ts.plot(data1.ts, xlab = "Periode", ylab = "Harga Close", main = paste("SMA m =", m))
+points(data1.ts)
+
+lines(data.gab[, 2], col = "green", lwd = 2)
+lines(data.gab[, 3], col = "red", lwd = 2)
+
+legend("topleft", c("aktual", "pemulusan", "ramalan"), lty = 1,
+       col = c("black", "green", "red"), cex = 0.7)
+
+# --- Akurasi Data Latih ---
+aktual_latih   <- train.ts
+prediksi_latih <- data.ramal[1:length(train.ts)]
+
+error_latih <- aktual_latih - prediksi_latih
+
+valid_idx     <- !is.na(error_latih)
+error_bersih  <- error_latih[valid_idx]
+aktual_bersih <- aktual_latih[valid_idx]
+
+SSE_latih  <- sum(error_bersih^2)
+MSE_latih  <- mean(error_bersih^2)
+RMSE_latih <- sqrt(MSE_latih)
+MAPE_latih <- mean(abs(error_bersih / aktual_bersih)) * 100
+
+akurasi_latih <- data.frame(
+  Jenis_Data = "Data Latih (Training)",
+  m = m,
+  SSE = SSE_latih,
+  MSE = MSE_latih,
+  RMSE = RMSE_latih,
+  MAPE = MAPE_latih
+)
+print(akurasi_latih)
+
+# --- Akurasi Data Uji ---
+aktual_uji <- testing$harga_close
+
+nilai_ramalan_uji <- data.ramal[length(data.ramal)]
+prediksi_uji <- rep(nilai_ramalan_uji, h_test)
+
+error_uji <- aktual_uji - prediksi_uji
+
+SSE_uji  <- sum(error_uji^2)
+MSE_uji  <- mean(error_uji^2)
+RMSE_uji <- sqrt(MSE_uji)
+MAPE_uji <- mean(abs(error_uji / aktual_uji)) * 100
+
+akurasi_uji <- data.frame(
+  Jenis_Data = "Data Uji (Testing)",
+  m = m,
+  SSE = SSE_uji,
+  MSE = MSE_uji,
+  RMSE = RMSE_uji,
+  MAPE = MAPE_uji
+)
+print(akurasi_uji)
+
+# 3.5 DOUBLE MOVING AVERAGE (DMA)
+
+dma <- SMA(data.sma, n = m)
+
+At <- 2 * data.sma - dma
+Bt <- (2 / (m - 1)) * (data.sma - dma)
+
+data.dma   <- At + Bt
+data.ramal2 <- c(NA, data.dma)
+
+t <- 1:h_test
+f <- c()
+for (i in t) {
+  f[i] <- At[length(At)] + Bt[length(Bt)] * i
+}
+
+data.gab2 <- cbind(
+  aktual     = data1.ts,
+  pemulusan1 = c(data.sma, rep(NA, h_test)),
+  pemulusan2 = c(dma, rep(NA, h_test)),
+  At         = c(At, rep(NA, h_test)),
+  Bt         = c(Bt, rep(NA, h_test)),
+  ramalan    = c(data.ramal2, f[-1])
+)
+
+print(tail(data.gab2, h_test + 2))
+
+# --- Plot ---
+ts.plot(data1.ts, xlab = "Periode", ylab = "Harga Close", main = paste("DMA m =", m))
+points(data1.ts)
+
+lines(data.gab2[, 3], col = "green", lwd = 2)
+lines(data.gab2[, 6], col = "red", lwd = 2)
+
+legend("topleft", c("aktual", "pemulusan", "ramalan"), lty = 1,
+       col = c("black", "green", "red"), cex = 0.7)
+
+# --- Akurasi Data Latih ---
+n_train <- length(train.ts)
+
+aktual_latih_dma   <- data.gab2[1:n_train, 1]
+prediksi_latih_dma <- data.gab2[1:n_train, 6]
+
+error_latih_dma <- aktual_latih_dma - prediksi_latih_dma
+
+valid_idx     <- !is.na(error_latih_dma)
+error_bersih  <- error_latih_dma[valid_idx]
+aktual_bersih <- aktual_latih_dma[valid_idx]
+
+SSE_latih_dma  <- sum(error_bersih^2)
+MSE_latih_dma  <- mean(error_bersih^2)
+RMSE_latih_dma <- sqrt(MSE_latih_dma)
+MAPE_latih_dma <- mean(abs(error_bersih / aktual_bersih)) * 100
+
+akurasi_latih_dma <- data.frame(
+  Metode = "DMA",
+  Jenis_Data = "Data Latih",
+  m = m,
+  SSE = SSE_latih_dma,
+  MSE = MSE_latih_dma,
+  RMSE = RMSE_latih_dma,
+  MAPE = MAPE_latih_dma
+)
+akurasi_latih_dma
+
+# --- Akurasi Data Uji ---
+n_total <- nrow(data.gab2)
+idx_uji <- (n_train + 1):n_total
+
+aktual_uji_dma   <- data.gab2[idx_uji, 1]
+prediksi_uji_dma <- data.gab2[idx_uji, 6]
+
+error_uji_dma <- aktual_uji_dma - prediksi_uji_dma
+
+SSE_uji_dma  <- sum(error_uji_dma^2)
+MSE_uji_dma  <- mean(error_uji_dma^2)
+RMSE_uji_dma <- sqrt(MSE_uji_dma)
+MAPE_uji_dma <- mean(abs(error_uji_dma / aktual_uji_dma)) * 100
+
+akurasi_uji_dma <- data.frame(
+  Metode = "DMA",
+  Jenis_Data = "Data Uji",
+  m = m,
+  SSE = SSE_uji_dma,
+  MSE = MSE_uji_dma,
+  RMSE = RMSE_uji_dma,
+  MAPE = MAPE_uji_dma
+)
+print(akurasi_uji_dma)
+
+# 3.6 SINGLE EXPONENTIAL SMOOTHING (SES)
+
+train_ts_obj <- ts(train.ts)
+ses.opt <- HoltWinters(train_ts_obj, gamma = FALSE, beta = FALSE, alpha = NULL)
+print(ses.opt)
+
+plot(ses.opt)
+
+ramalan.ses <- forecast(ses.opt, h = n_test)
+ramalan.ses
+
+# --- Akurasi Data Latih ---
+SSE.ses <- ses.opt$SSE
+MSE.ses <- SSE.ses / length(train.ts)
+RMSE.ses <- sqrt(MSE.ses)
+
+sisaan.ses <- ramalan.ses$residuals
+
+MAPE.ses <- mean(abs(sisaan.ses[2:length(train.ts)] / train.ts[2:length(train.ts)]) * 100)
+
+akurasi_train.ses <- matrix(c(SSE.ses, MSE.ses, RMSE.ses, MAPE.ses))
+row.names(akurasi_train.ses) <- c("SSE", "MSE", "RMSE", "MAPE")
+colnames(akurasi_train.ses) <- paste("SES alpha =", round(ses.opt$alpha, 3))
+
+akurasi_train.ses
+
+# --- Akurasi Data Uji ---
+e.ses <- as.numeric(ramalan.ses$mean) - as.numeric(testing$harga_close)
+
+SSE_test.ses  <- sum(e.ses^2)
+MSE_test.ses  <- mean(e.ses^2)
+RMSE_test.ses <- sqrt(MSE_test.ses)
+MAPE_test.ses <- mean(abs(e.ses / testing$harga_close) * 100)
+
+akurasi_test.ses <- matrix(c(SSE_test.ses, MSE_test.ses, RMSE_test.ses, MAPE_test.ses))
+row.names(akurasi_test.ses) <- c("SSE", "MSE", "RMSE", "MAPE")
+colnames(akurasi_test.ses) <- paste("SES alpha =", round(ses.opt$alpha, 3))
+
+akurasi_test.ses
+
+# 3.7 DOUBLE EXPONENTIAL SMOOTHING (DES)
+
+des.opt <- HoltWinters(ts(train.ts), gamma = FALSE)
+print(des.opt)
+
+plot(des.opt)
+
+ramalan.des <- forecast(des.opt, h = n_test)
+ramalan.des
+
+# --- Akurasi Data Latih ---
+SSE.des  <- des.opt$SSE
+MSE.des  <- SSE.des / length(train.ts)
+RMSE.des <- sqrt(MSE.des)
+sisaan.des <- ramalan.des$residuals
+MAPE.des <- mean(abs(sisaan.des[3:length(train.ts)] /
+                       train.ts[3:length(train.ts)]) * 100)
+
+akurasi_train.des <- matrix(c(SSE.des, MSE.des, RMSE.des, MAPE.des))
+row.names(akurasi_train.des) <- c("SSE", "MSE", "RMSE", "MAPE")
+colnames(akurasi_train.des) <- paste0("DES alpha=", round(des.opt$alpha, 3),
+                                       " beta=", round(des.opt$beta, 3))
+akurasi_train.des
+
+# --- Akurasi Data Uji ---
+e.des <- as.numeric(ramalan.des$mean) - as.numeric(testing$harga_close)
+
+SSE_test.des  <- sum(e.des^2)
+MSE_test.des  <- mean(e.des^2)
+RMSE_test.des <- sqrt(MSE_test.des)
+
+MAPE_test.des <- mean(abs(e.des / testing$harga_close) * 100)
+
+akurasi_test.des <- matrix(c(SSE_test.des, MSE_test.des, RMSE_test.des, MAPE_test.des))
+row.names(akurasi_test.des) <- c("SSE", "MSE", "RMSE", "MAPE")
+colnames(akurasi_test.des) <- paste0("DES alpha=", round(des.opt$alpha, 3),
+                                     " beta=", round(des.opt$beta, 3))
+
+akurasi_test.des
+
+# 4. KESIMPULAN
+# --- Perbandingan Keseluruhan Metode ---
+tabel_akurasi <- data.frame(
+  Metode = c("SMA", "DMA", "SES", "DES"),
+
+  SSE_Latih  = c(SSE_latih, SSE_latih_dma, SSE.ses, SSE.des),
+  MSE_Latih  = c(MSE_latih, MSE_latih_dma, MSE.ses, MSE.des),
+  RMSE_Latih = c(RMSE_latih, RMSE_latih_dma, RMSE.ses, RMSE.des),
+  MAPE_Latih = c(MAPE_latih, MAPE_latih_dma, MAPE.ses, MAPE.des),
+
+  SSE_Uji  = c(SSE_uji, SSE_uji_dma, SSE_test.ses, SSE_test.des),
+  MSE_Uji  = c(MSE_uji, MSE_uji_dma, MSE_test.ses, MSE_test.des),
+  RMSE_Uji = c(RMSE_uji, RMSE_uji_dma, RMSE_test.ses, RMSE_test.des),
+  MAPE_Uji = c(MAPE_uji, MAPE_uji_dma, MAPE_test.ses, MAPE_test.des)
+)
+
+print(tabel_akurasi, digits = 4)
+
+# (Catatan: gunakan print(), bukan round(), langsung pada data.frame ini
+# karena kolom "Metode" berisi teks, bukan angka.)
+
+metode_terbaik <- tabel_akurasi$Metode[which.min(tabel_akurasi$MSE_Uji)]
+cat("\nMetode terbaik berdasarkan MSE Data Uji terkecil:", metode_terbaik, "\n")
+```
+
