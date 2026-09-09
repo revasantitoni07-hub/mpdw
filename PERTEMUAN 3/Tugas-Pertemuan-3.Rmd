@@ -1,0 +1,383 @@
+---
+title: "Tugas Individu Pertemuan 3 - Regresi dengan Peubah Lag"
+subtitle: "Studi Kasus: Indeks Kualitas Udara (AQI) Kota New Delhi"
+author: "reva yulita sari - x1004261008"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+# Pendahuluan
+
+Tugas ini menerapkan tiga metode regresi dengan peubah lag -- **Koyck**, **Distributed Lag Model (DLM)**, dan **Autoregressive Distributed Lag (ARDL)** -- pada data kualitas udara per jam Kota New Delhi. Peubah dependen ($Y$) yang digunakan adalah **AQI (Air Quality Index)**, sedangkan peubah independen ($X$) dipilih dari salah satu polutan yang tersedia (CO, NO2, O3, PM10, PM2.5, atau SO2).
+
+# *Packages*
+
+```{r}
+#PACKAGES
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(lmtest)
+library(car)
+```
+
+# Impor dan Eksplorasi Data
+
+```{r}
+#IMPOR DATA
+data <- read.csv("C:/Users/USER/Downloads/NewDelhi_Air_quality.csv")
+data <- data[order(data$ts), ]   # urutkan berdasarkan waktu
+str(data)
+head(data)
+```
+
+Data terdiri atas **`r nrow(data)` observasi per jam** dengan peubah AQI dan enam polutan (CO, NO2, O3, PM10, PM2.5, SO2).
+
+## Pemilihan Peubah Independen (X)
+
+Pemilihan peubah $X$ dilakukan dengan melihat korelasi Pearson masing-masing polutan terhadap AQI. Polutan dengan korelasi absolut tertinggi dipilih sebagai peubah independen.
+
+```{r}
+polutan <- c("CO","no2","o3","pm10","pm25","so2")
+korelasi <- sapply(data[, polutan], function(x) cor(data$AQI, x))
+sort(round(korelasi, 4), decreasing = TRUE)
+```
+
+Berdasarkan hasil di atas, peubah **O3 (Ozon)** memiliki korelasi paling kuat terhadap AQI (sekitar **0.97**), sehingga peubah tersebut dipilih sebagai peubah independen $X$. Peubah $Y$ tetap AQI.
+
+```{r}
+df <- data.frame(Yt = data$AQI, Xt = data$o3)
+head(df)
+```
+
+# Pembagian Data
+
+Data dibagi menjadi data latih (80%) dan data uji (20%) secara berurutan (tanpa acak) karena data bersifat deret waktu.
+
+```{r}
+#SPLIT DATA
+n <- nrow(df)
+n_train <- floor(0.8 * n)
+
+train <- df[1:n_train, ]
+test  <- df[(n_train + 1):n, ]
+
+cat("Jumlah data latih :", nrow(train), "\n")
+cat("Jumlah data uji    :", nrow(test), "\n")
+```
+
+```{r}
+#data time series
+train.ts <- ts(train)
+test.ts  <- ts(test)
+data.ts  <- ts(df)
+```
+
+-   **Distributed Lag Model** : Peubah dependen $Y$ dipengaruhi oleh lag dari peubah independen $X$ ($X_{t-1}, X_{t-2}, ...$)
+-   **Autoregressive Model** : Peubah dependen $Y$ dipengaruhi oleh lag dirinya sendiri ($Y_{t-1}, Y_{t-2}, ...$) dan $X$ pada waktu sekarang ($X_t$)
+
+# Model Koyck
+
+Model Koyck mengasumsikan bahwa semakin jauh jarak lag peubah independen dari periode sekarang, semakin kecil pengaruhnya terhadap peubah dependen (geometric lag).
+
+$$
+y_t=a(1-\lambda)+\beta_0X_t+\lambda Y_{t-1}+V_t
+$$
+
+## Pemodelan
+
+```{r}
+#MODEL KOYCK
+model.koyck <- koyckDlm(x = train$Xt, y = train$Yt)
+summary(model.koyck)
+AIC(model.koyck)
+BIC(model.koyck)
+```
+
+Hasil di atas menunjukkan bahwa peubah $Y_{t-1}$ dan $X_t$ memiliki nilai $p$-value $<0.05$, artinya keduanya berpengaruh signifikan terhadap $Y_t$. Model yang terbentuk adalah:
+
+$$
+\hat{Y_t}=0.5480+0.2583X_t+0.4196Y_{t-1}
+$$
+
+## Peramalan dan Akurasi
+
+```{r}
+fore.koyck <- forecast(model = model.koyck, x = test$Xt, h = nrow(test))
+fore.koyck
+mape.koyck <- MLmetrics::MAPE(fore.koyck$forecasts, test$Yt)
+mape.koyck  #akurasi data uji
+GoF(model.koyck)  #akurasi data latih
+```
+
+Model Koyck menghasilkan MAPE data uji sebesar **`r round(mape.koyck*100,2)`%**, yang tergolong sangat baik (< 10%).
+
+# Regression with Distributed Lag (DLM)
+
+## Pemodelan (Lag = 1)
+
+```{r}
+model.dlm <- dlm(x = train$Xt, y = train$Yt, q = 1)
+summary(model.dlm)
+AIC(model.dlm)
+BIC(model.dlm)
+```
+
+Pada model dengan $q=1$, hanya $X_t$ yang signifikan ($p<0.05$), sedangkan $X_{t-1}$ tidak signifikan. Model yang terbentuk:
+
+$$
+\hat{Y_t}=0.4658+0.4601X_t-0.0059X_{t-1}
+$$
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.dlm <- forecast(model = model.dlm, x = test$Xt, h = nrow(test))
+fore.dlm
+mape.dlm <- MLmetrics::MAPE(fore.dlm$forecasts, test$Yt)
+mape.dlm
+GoF(model.dlm)
+```
+
+## *Lag* Optimum DLM
+
+```{r}
+#penentuan lag optimum
+finiteDLMauto(formula = Yt ~ Xt,
+              data = data.frame(train), q.min = 1, q.max = 10,
+              model.type = "dlm", error.type = "AIC", trace = TRUE)
+```
+
+Berdasarkan kriteria AIC, lag optimum tercapai pada **q = 10** (AIC terendah $\approx$ 22.97). Selanjutnya dilakukan pemodelan dengan $q=10$.
+
+```{r}
+model.dlm2 <- dlm(x = train$Xt, y = train$Yt, q = 10)
+summary(model.dlm2)
+AIC(model.dlm2)
+BIC(model.dlm2)
+```
+
+Pada model dengan lag optimum ($q=10$), peubah yang signifikan pada taraf nyata 5% antara lain $X_t$, $X_{t-7}$, $X_{t-8}$, $X_{t-9}$, dan $X_{t-10}$.
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.dlm2 <- forecast(model = model.dlm2, x = test$Xt, h = nrow(test))
+mape.dlm2 <- MLmetrics::MAPE(fore.dlm2$forecasts, test$Yt)
+mape.dlm2
+GoF(model.dlm2)
+```
+
+Catatan: karena jumlah data latih relatif terbatas (`r nrow(train)` observasi), pencarian lag hingga $q=15$ menunjukkan AIC terus menurun (indikasi *overfitting*), sehingga pencarian dibatasi pada rentang $q=1$ sampai $10$ mengikuti kaidah kehematan model (*parsimony*).
+
+# Model Autoregressive Distributed Lag (ARDL)
+
+Model ARDL berordo $(p,q)$ melibatkan lag dari peubah independen ($p$) sekaligus lag dari peubah dependen itu sendiri ($q$).
+
+## Pemodelan ARDL(1,1)
+
+```{r}
+model.ardl <- ardlDlm(formula = Yt ~ Xt, data = train, p = 1, q = 1)
+summary(model.ardl)
+AIC(model.ardl)
+BIC(model.ardl)
+```
+
+Seluruh peubah ($X_t$, $X_{t-1}$, dan $Y_{t-1}$) signifikan pada taraf nyata 5%. Model yang terbentuk:
+
+$$
+\hat{Y_t}=-0.1491+0.4782X_t-0.2233X_{t-1}+0.4526Y_{t-1}
+$$
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.ardl <- forecast(model = model.ardl, x = test$Xt, h = nrow(test))
+fore.ardl
+mape.ardl <- MLmetrics::MAPE(fore.ardl$forecasts, test$Yt)
+mape.ardl
+GoF(model.ardl)
+```
+
+## *Lag* / Orde Optimum ARDL
+
+```{r}
+model.ardl.opt <- ardlBoundOrders(data = data.frame(train), ic = "AIC",
+                                   formula = Yt ~ Xt, max.p = 6, max.q = 6)
+model.ardl.opt
+model.ardl.opt$min.Stat
+```
+
+Nilai AIC terendah diperoleh pada kombinasi $p=2$ (lag $X$) dan $q=1$ (lag $Y$). Selanjutnya dilakukan pemodelan dengan orde optimum tersebut.
+
+```{r}
+model.ardl.opt.fit <- ardlDlm(formula = Yt ~ Xt, data = train, p = 2, q = 1)
+summary(model.ardl.opt.fit)
+AIC(model.ardl.opt.fit)
+BIC(model.ardl.opt.fit)
+```
+
+```{r}
+fore.ardl.opt <- forecast(model = model.ardl.opt.fit, x = test$Xt, h = nrow(test))
+mape.ardl.opt <- MLmetrics::MAPE(fore.ardl.opt$forecasts, test$Yt)
+mape.ardl.opt
+GoF(model.ardl.opt.fit)
+```
+
+Model ARDL(2,1) memberikan AIC/BIC yang lebih baik dibanding ARDL(1,1) dan MAPE data uji yang sedikit lebih kecil.
+
+# Pemodelan DLM & ARDL dengan *Package* `dynlm`
+
+Sebagai pembanding, pemodelan juga dilakukan menggunakan fungsi `dynlm()` untuk mempermudah pengujian asumsi klasik dan uji *encompassing*.
+
+```{r}
+#sama dengan model dlm q=1
+cons_lm1 <- dynlm(Yt ~ Xt + L(Xt), data = train.ts)
+
+#sama dengan model ardl p=0, q=1 (AR murni + Xt)
+cons_lm2 <- dynlm(Yt ~ Xt + L(Yt), data = train.ts)
+
+#sama dengan ardl p=1, q=1
+cons_lm3 <- dynlm(Yt ~ Xt + L(Xt) + L(Yt), data = train.ts)
+
+#sama dengan dlm q=2
+cons_lm4 <- dynlm(Yt ~ Xt + L(Xt) + L(Xt,2), data = train.ts)
+```
+
+## Ringkasan Model
+
+```{r}
+summary(cons_lm1)
+summary(cons_lm2)
+summary(cons_lm3)
+summary(cons_lm4)
+```
+
+## *Deviance* (SSE)
+
+```{r}
+deviance(cons_lm1)
+deviance(cons_lm2)
+deviance(cons_lm3)
+deviance(cons_lm4)
+```
+
+Nilai *deviance* (SSE) terus menurun dari model 1 ke model 3, dan terkecil pada model 4 (DLM q=2), menunjukkan bahwa penambahan peubah lag secara umum memperbaiki kesesuaian model terhadap data latih.
+
+## Uji *Encompassing*
+
+```{r}
+if (require("lmtest")) encomptest(cons_lm1, cons_lm2)
+```
+
+-   **Model 1 (DLM q=1) vs Model E**: $p$-value $\approx$ 1.03e-08 ($<0.05$), artinya penambahan lag $Y$ ($L(Y_t)$) memberikan peningkatan yang signifikan -- Model 1 saja belum memadai.
+-   **Model 2 (AR + X) vs Model E**: $p$-value $\approx$ 1.59e-05 ($<0.05$), artinya penambahan lag $X$ ($L(X_t)$) juga memberikan peningkatan signifikan -- Model 2 saja belum memadai.
+
+Kesimpulannya, kombinasi lag $X$ **dan** lag $Y$ (seperti pada ARDL) diperlukan untuk menjelaskan AQI secara memadai.
+
+## Uji Autokorelasi Residual (Durbin-Watson)
+
+```{r}
+dwtest(cons_lm1)
+dwtest(cons_lm2)
+dwtest(cons_lm3)
+dwtest(cons_lm4)
+```
+
+-   Model 1 (DLM q=1): $DW=1.09$, $p<0.001$ → terdapat autokorelasi positif pada residual.
+-   Model 2 (AR+X): $DW=1.69$, $p=0.077$ → tidak cukup bukti autokorelasi pada taraf 5%.
+-   Model 3 (ARDL 1,1): $DW=2.76$, $p=0.995$ → tidak ada indikasi autokorelasi.
+-   Model 4 (DLM q=2): $DW=2.13$, $p=0.582$ → tidak ada indikasi autokorelasi.
+
+## Uji Heteroskedastisitas (Breusch-Pagan)
+
+```{r}
+bptest(cons_lm1)
+bptest(cons_lm2)
+bptest(cons_lm3)
+bptest(cons_lm4)
+```
+
+-   Jika $p$-value $>0.05$ → tidak ada heteroskedastisitas.
+-   Jika $p$-value $\le0.05$ → ada heteroskedastisitas.
+
+Model 1 ($p=0.543$) dan Model 4 ($p=0.817$) tidak menunjukkan heteroskedastisitas, sedangkan Model 2 ($p<0.001$) dan Model 3 ($p=0.0037$) terindikasi heteroskedastis.
+
+## Uji Normalitas (Shapiro-Wilk)
+
+H0: Residual berdistribusi normal.
+H1: Residual tidak berdistribusi normal.
+
+```{r}
+shapiro.test(residuals(cons_lm1))
+shapiro.test(residuals(cons_lm2))
+shapiro.test(residuals(cons_lm3))
+shapiro.test(residuals(cons_lm4))
+```
+
+-   Jika $p$-value $>0.05$ → gagal tolak H0 → residual normal.
+-   Jika $p$-value $\le0.05$ → tolak H0 → residual tidak normal.
+
+Hanya Model 3 (ARDL 1,1) yang residualnya berdistribusi normal ($p=0.075>0.05$); ketiga model lainnya menunjukkan penyimpangan dari normalitas.
+
+# Perbandingan Model dan Kinerja Peramalan
+
+## Tabel Akurasi (MAPE Data Uji)
+
+```{r}
+akurasi <- matrix(c(mape.koyck, mape.dlm, mape.dlm2, mape.ardl, mape.ardl.opt))
+row.names(akurasi) <- c("Koyck", "DLM (q=1)", "DLM optimum (q=10)",
+                         "ARDL(1,1)", "ARDL optimum (p=2,q=1)")
+colnames(akurasi) <- "MAPE (data uji)"
+round(akurasi * 100, 3)   # dalam persen
+```
+
+Kelima model menghasilkan MAPE data uji di bawah 5%, yang menandakan seluruh model memiliki kinerja peramalan yang sangat baik. Model **ARDL optimum (p=2, q=1)** memberikan MAPE terkecil, diikuti oleh ARDL(1,1).
+
+## Visualisasi Perbandingan Peramalan
+
+```{r, fig.width=8, fig.height=5}
+waktu <- 1:nrow(test)
+
+plot(waktu, test$Yt, type = "b", col = "black", pch = 16,
+     ylim = range(c(test$Yt, fore.koyck$forecasts, fore.dlm$forecasts,
+                     fore.dlm2$forecasts, fore.ardl$forecasts, fore.ardl.opt$forecasts)),
+     xlab = "Periode ke-", ylab = "AQI",
+     main = "Perbandingan Hasil Peramalan AQI - Data Uji")
+
+lines(waktu, fore.koyck$forecasts, col = "red");     points(waktu, fore.koyck$forecasts, col = "red")
+lines(waktu, fore.dlm$forecasts, col = "blue");      points(waktu, fore.dlm$forecasts, col = "blue")
+lines(waktu, fore.dlm2$forecasts, col = "orange");   points(waktu, fore.dlm2$forecasts, col = "orange")
+lines(waktu, fore.ardl$forecasts, col = "darkgreen");points(waktu, fore.ardl$forecasts, col = "darkgreen")
+lines(waktu, fore.ardl.opt$forecasts, col = "purple");points(waktu, fore.ardl.opt$forecasts, col = "purple")
+
+legend("topleft",
+       c("Aktual", "Koyck", "DLM (q=1)", "DLM optimum (q=10)",
+         "ARDL(1,1)", "ARDL optimum (p=2,q=1)"),
+       lty = 1, pch = c(16, rep(1,5)),
+       col = c("black", "red", "blue", "orange", "darkgreen", "purple"),
+       cex = 0.75)
+```
+
+Dari grafik terlihat bahwa seluruh model peramalan mampu mengikuti pola naik-turun AQI aktual dengan cukup baik. Model **ARDL** (garis hijau tua dan ungu) tampak paling mendekati data aktual secara konsisten, sejalan dengan nilai MAPE-nya yang paling kecil.
+
+# Kesimpulan
+
+1.  Peubah **O3 (Ozon)** dipilih sebagai peubah independen ($X$) karena memiliki korelasi tertinggi terhadap AQI ($r\approx0.97$).
+2.  Ketiga metode (Koyck, DLM, ARDL) berhasil diterapkan, dengan lag/orde optimum sebagai berikut:
+    -   Koyck: model geometric lag (order tetap 1).
+    -   DLM: lag optimum $q=10$ berdasarkan AIC.
+    -   ARDL: orde optimum $(p,q)=(2,1)$ berdasarkan AIC.
+3.  Berdasarkan uji asumsi klasik (autokorelasi, heteroskedastisitas, dan normalitas), **model ARDL(1,1)** memberikan hasil paling konsisten: tidak ada autokorelasi (DW test) dan residual berdistribusi normal (Shapiro-Wilk), meskipun masih terindikasi heteroskedastisitas ringan.
+4.  Berdasarkan metrik akurasi **MAPE data uji**, seluruh model memiliki performa peramalan yang sangat baik (MAPE < 5%), dengan **model ARDL optimum (p=2, q=1)** memberikan nilai MAPE terkecil, sehingga dipilih sebagai model terbaik untuk meramalkan AQI Kota New Delhi berdasarkan konsentrasi O3.
+5.  Sebagai catatan, keterbatasan heteroskedastisitas pada beberapa model dapat diatasi lebih lanjut dengan pendekatan robust standard error atau transformasi peubah pada penelitian selanjutnya.
